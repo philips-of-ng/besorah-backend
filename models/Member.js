@@ -1,4 +1,4 @@
-const mongoose = require('mongoose');
+import mongoose from "mongoose";
 
 const MemberSchema = new mongoose.Schema({
   churchId: {
@@ -36,4 +36,5 @@ const MemberSchema = new mongoose.Schema({
 // We create a compound index so phone numbers are unique *per church*
 MemberSchema.index({ churchId: 1, phoneNumber: 1 }, { unique: true });
 
-module.exports = mongoose.model('Member', MemberSchema);
+const Member = mongoose.model('Member', MemberSchema);
+export default Member

@@ -1,7 +1,9 @@
-const express = require('express');
-const mongoose = require('mongoose');
-const cors = require('cors');
-require('dotenv').config();
+import express from 'express'
+import mongoose from 'mongoose';
+import cors from 'cors'
+import dotenv from 'dotenv'
+
+dotenv.config()
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -11,8 +13,8 @@ app.use(cors());
 app.use(express.json());
 
 // Import Routes
-const churchRoutes = require('./routes/churchRoutes');
-const attendanceRoutes = require('./routes/attendanceRoutes');
+import churchRoutes from './routes/churchRoutes.js'
+import attendanceRoutes from './routes/attendanceRoutes.js';
 
 // Mount Routes
 app.use('/api/church', churchRoutes);

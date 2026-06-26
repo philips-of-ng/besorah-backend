@@ -1,4 +1,4 @@
-const mongoose = require('mongoose');
+import mongoose from "mongoose";
 
 const AttendanceEventSchema = new mongoose.Schema({
   churchId: {
@@ -28,4 +28,5 @@ const AttendanceEventSchema = new mongoose.Schema({
 // Index to ensure we don't accidentally create duplicate instances of the same service on the same day
 AttendanceEventSchema.index({ churchId: 1, serviceName: 1, date: 1 }, { unique: true });
 
-module.exports = mongoose.model('AttendanceEvent', AttendanceEventSchema);
+const AttendanceEvent = mongoose.model('AttendanceEvent', AttendanceEventSchema);
+export default AttendanceEvent

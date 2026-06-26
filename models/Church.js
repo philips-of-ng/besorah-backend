@@ -1,4 +1,4 @@
-const mongoose = require('mongoose');
+import mongoose from "mongoose";
 
 const ChurchSchema = new mongoose.Schema({
   name: {
@@ -16,4 +16,5 @@ const ChurchSchema = new mongoose.Schema({
   }
 });
 
-module.exports = mongoose.model('Church', ChurchSchema);
+const Church = mongoose.model('Church', ChurchSchema);
+export default Church
