@@ -20,7 +20,21 @@ const MemberSchema = new mongoose.Schema({
     type: String,
     trim: true,
     lowercase: true,
-    default: ""
+    default: "" // Handled cleanly now that it's out of the unique restriction
+  },
+  profession: {
+    type: String,
+    required: false,
+    trim: true
+  },
+  birthday: {
+    type: String,
+    required: false,
+    trim: true
+  },
+  attendanceStatus: { // Added to track First Timer / Returning Visitor / Regular Member choices
+    type: String,
+    required: false
   },
   status: {
     type: String,
@@ -33,8 +47,8 @@ const MemberSchema = new mongoose.Schema({
   }
 });
 
-// We create a compound index so phone numbers are unique *per church*
+// Enforce unique phone numbers *per church ecosystem*
 MemberSchema.index({ churchId: 1, phoneNumber: 1 }, { unique: true });
 
 const Member = mongoose.model('Member', MemberSchema);
-export default Member
+export default Member;

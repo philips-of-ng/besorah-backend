@@ -4,7 +4,7 @@ const router = express.Router()
 import Church from '../models/Church.js';
 import AttendanceEvent from '../models/AttendanceEvent.js';
 
-import { checkMemberRetention, createEvent, findOrCreate, getAnalytics, registerChurch } from '../controllers/churchController.js'
+import { checkMemberRetention, createEvent, findOrCreate, getAnalytics, registerChurch, getLiveFeed, getMonthlyBirthdays, getFollowUpPipeline } from '../controllers/churchController.js'
 
 // 1. Register a New Church
 router.post('/register', registerChurch);
@@ -22,6 +22,11 @@ router.get('/analytics/:churchId', getAnalytics);
 
 // 5. System Execution: Trigger the retention check engine sweep
 router.post('/retention/sweep', checkMemberRetention);
+
+// Real-Time Actionable Insights
+router.get('/analytics/live/:churchId', getLiveFeed);
+router.get('/analytics/birthdays/:churchId', getMonthlyBirthdays);
+router.get('/analytics/followup/:churchId', getFollowUpPipeline);
 
 
 export default router
