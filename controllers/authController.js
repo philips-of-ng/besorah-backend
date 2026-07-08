@@ -1,27 +1,30 @@
-import { google } from 'googleapis';
-import Church from '../models/Church.js';
-import { initializeChurchDrive } from '../utils/googleSheetsHelper.js'; // Imported initialization helper
+import { google } from "googleapis";
+import Church from "../models/Church.js";
+import { initializeChurchDrive } from "../utils/googleSheetsHelper.js"; // Imported initialization helper
+
+console.log("REDIRECT URI CHECK:", process.env.GOOGLE_REDIRECT_URI);
+console.log("cl sec CHECK:", process.env.GOOGLE_CLIENT_SECRET);
 
 // Configure the OAuth2 Client using server environment variables
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_URI // e.g., http://localhost:5000/api/auth/google/callback
+  process.env.GOOGLE_REDIRECT_URI, // e.g., http://localhost:5000/api/auth/google/callback
 );
 
 // 1. Generate the Google Consent Screen URL
 export const getGoogleAuthUrl = (req, res) => {
   const scopes = [
-    'https://www.googleapis.com/auth/userinfo.email',
-    'https://www.googleapis.com/auth/userinfo.profile',
-    'https://www.googleapis.com/auth/spreadsheets', // Full access to sheets
-    'https://www.googleapis.com/auth/drive.file'     // Access to create files in Drive
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+    "https://www.googleapis.com/auth/spreadsheets", // Full access to sheets
+    "https://www.googleapis.com/auth/drive.file", // Access to create files in Drive
   ];
 
   const url = oauth2Client.generateAuthUrl({
-    access_type: 'offline', // CRITICAL: Guarantees we get a refresh_token
-    prompt: 'consent',      // Forces Google to show the consent screen every time to secure the token
-    scope: scopes
+    access_type: "offline", // CRITICAL: Guarantees we get a refresh_token
+    prompt: "consent", // Forces Google to show the consent screen every time to secure the token
+    scope: scopes,
   });
 
   res.status(200).json({ url });
@@ -32,7 +35,9 @@ export const handleGoogleCallback = async (req, res) => {
   const { code } = req.query;
 
   if (!code) {
-    return res.status(400).json({ error: "Authorization code missing from callback parameters." });
+    return res
+      .status(400)
+      .json({ error: "Authorization code missing from callback parameters." });
   }
 
   try {
@@ -41,11 +46,11 @@ export const handleGoogleCallback = async (req, res) => {
     oauth2Client.setCredentials(tokens);
 
     // Fetch the church's Google profile information
-    const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+    const oauth2 = google.oauth2({ version: "v2", auth: oauth2Client });
     const userInfo = await oauth2.userinfo.get();
-    
+
     const googleEmail = userInfo.data.email;
-    const googleName = userInfo.data.name; 
+    const googleName = userInfo.data.name;
 
     // Search the DB to see if a church is already registered with this Google account
     let church = await Church.findOne({ googleConnectedEmail: googleEmail });
@@ -53,21 +58,26 @@ export const handleGoogleCallback = async (req, res) => {
     if (!church) {
       // ACCOUNT CREATION FLOW (First time onboarding)
       church = new Church({
-        name: googleName, 
+        name: googleName,
         location: "Not Specified Yet",
         googleConnectedEmail: googleEmail,
-        googleRefreshToken: tokens.refresh_token, 
-        syncedSheets: {}
+        googleRefreshToken: tokens.refresh_token,
+        syncedSheets: {},
       });
 
       // AUTOMATED DRIVE WORKSPACE INITIALIZATION
       // Builds the parent folder and seeds the headered logs instantly
       if (tokens.refresh_token) {
         try {
-          const mappedSheets = await initializeChurchDrive(tokens.refresh_token);
+          const mappedSheets = await initializeChurchDrive(
+            tokens.refresh_token,
+          );
           church.syncedSheets = mappedSheets; // Saves the fresh map directly to the instance
         } catch (driveError) {
-          console.error("⚠️ Automated workspace provisioning delayed: ", driveError.message);
+          console.error(
+            "⚠️ Automated workspace provisioning delayed: ",
+            driveError.message,
+          );
           // Proceeding allows account generation to complete even if Drive API experiences latency
         }
       }
@@ -81,16 +91,32 @@ export const handleGoogleCallback = async (req, res) => {
 
     await church.save();
 
-    res.status(200).json({
-      success: true,
-      message: "Authentication successful",
-      churchId: church._id,
-      email: church.googleConnectedEmail,
-      name: church.name,
-      syncedSheets: church.syncedSheets // Returns sheet references to help frontend mapping
-    });
-
+    return res.status(200).send(`
+      <html>
+        <body>
+          <script>
+            const authPayload = {
+              success: true,
+              payload: {
+                id: "${church._id}",
+                email: "${church.googleConnectedEmail}",
+                name: "${church.name}",
+                syncedSheets: ${JSON.stringify(church.syncedSheets || {})}
+              }
+            };
+            // Send payload to the Electron main app window opener
+            window.opener.postMessage(authPayload, "*");
+          </script>
+          <div style="font-family: sans-serif; text-align: center; margin-top: 40px; color: #334155;">
+            <h2>Authentication Successful!</h2>
+            <p>Syncing workspace directories... You can close this window.</p>
+          </div>
+        </body>
+      </html>
+    `);
   } catch (error) {
-    res.status(500).json({ error: "Google Onboarding pipeline failed: " + error.message });
+    res
+      .status(500)
+      .json({ error: "Google Onboarding pipeline failed: " + error.message });
   }
 };
