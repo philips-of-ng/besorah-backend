@@ -7,6 +7,7 @@ import AttendanceEvent from "../models/AttendanceEvent.js";
 
 // Helper function to centralize QR target link contracts
 const generateEventQR = async (churchId, serviceName) => {
+
   // Encodes parameters cleanly into your production URL structure
   const targetUrl = `https://checkin.besorah.app/?churchId=${churchId}&serviceName=${encodeURIComponent(serviceName)}`;
 
@@ -33,6 +34,9 @@ export const registerChurch = async (req, res) => {
 
 // 2. CREATE AN EVENT (Admin Manual / Pre-scheduling Flow)
 export const createEvent = async (req, res) => {
+
+  console.log('body of the request', req.body)
+
   const { churchId, serviceName, date } = req.body;
   try {
     const newEvent = new AttendanceEvent({
@@ -43,8 +47,14 @@ export const createEvent = async (req, res) => {
     });
     await newEvent.save();
 
+    console.log('Event saved in DB');
+    
+
     // Generate QR code for this specific pre-scheduled event path
     const qrCodeImage = await generateEventQR(churchId, serviceName);
+
+    console.log('Generated QR successfully.');
+    
 
     res.status(201).json({
       success: true,
