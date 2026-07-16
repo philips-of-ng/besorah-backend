@@ -9,7 +9,7 @@ import churchRoutes from './routes/churchRoutes.js';
 import attendanceRoutes from './routes/attendanceRoutes.js';
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors());
@@ -31,7 +31,7 @@ mongoose.connect(process.env.MONGO_URI)
     console.log("🚀 Successfully connected to MongoDB.");
     
     app.listen(PORT, () => {
-      console.log(`Server is running on port ${PORT}`);
+      console.log(`Server is running on port ${process.env.PORT}`);
     });
   })
   .catch((error) => {
