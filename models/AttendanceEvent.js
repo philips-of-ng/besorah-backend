@@ -1,5 +1,18 @@
 import mongoose from "mongoose";
 
+// 🌟 SUBDOCUMENT SCHEMA: Pairs each member with their exact check-in timestamp
+const AttendeeSchema = new mongoose.Schema({
+  memberId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Member',
+    required: true
+  },
+  scannedAt: {
+    type: Date,
+    default: Date.now // 🌟 Captures the exact moment they checked in
+  }
+}, { _id: false }); // Prevents MongoDB from generating unnecessary subdocument ObjectIDs
+
 const AttendanceEventSchema = new mongoose.Schema({
   churchId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -15,10 +28,8 @@ const AttendanceEventSchema = new mongoose.Schema({
     type: Date,
     required: true // The specific calendar date of this occurrence
   },
-  attendedMembers: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Member'
-  }],
+  // 🌟 Transitioned from a raw ObjectID array to the time-tracking subdocument array
+  attendedMembers: [AttendeeSchema],
   createdAt: {
     type: Date,
     default: Date.now
@@ -29,4 +40,4 @@ const AttendanceEventSchema = new mongoose.Schema({
 AttendanceEventSchema.index({ churchId: 1, serviceName: 1, date: 1 }, { unique: true });
 
 const AttendanceEvent = mongoose.model('AttendanceEvent', AttendanceEventSchema);
-export default AttendanceEvent
+export default AttendanceEvent;

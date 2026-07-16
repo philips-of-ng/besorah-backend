@@ -8,6 +8,8 @@ import AttendanceEvent from '../models/AttendanceEvent.js';
 // Controller Imports
 import { createEventType } from '../controllers/eventController.js';
 import { getEventTypes } from '../controllers/eventController.js';
+import { resolveFollowUpTask } from '../controllers/memberController.js';
+import { getMemberHistory } from '../controllers/memberController.js';
 
 import { 
   registerChurch, 
@@ -17,8 +19,10 @@ import {
   checkMemberRetention, 
   getLiveFeed, 
   getMonthlyBirthdays, 
-  getFollowUpPipeline 
+  getFollowUpPipeline, 
+  getPublicChurchProfile
 } from '../controllers/churchController.js';
+import { getAllMembers } from '../controllers/churchController.js';
 
 // =========================================================================
 // 1. CHURCH ONBOARDING & REGISTRATION
@@ -49,6 +53,12 @@ router.post('/event/types', createEventType);
 // Pull existing custom category lists to populate frontend selection options
 router.get('/event/types', getEventTypes);
 
+router.get('/members/:memberId/history', getMemberHistory);
+
+
+router.get('/public-profile', getPublicChurchProfile)
+
+router.get('/members', getAllMembers)
 
 // =========================================================================
 // 4. ANALYTICS, DEEP INFERENCES & REAL-TIME FEEDS
@@ -65,6 +75,9 @@ router.get('/analytics/birthdays/:churchId', getMonthlyBirthdays);
 
 // Welfare Tracking Dashboard: Pull automated follow-up priority pipelines
 router.get('/analytics/followup/:churchId', getFollowUpPipeline);
+
+
+router.post('/retention/resolve', resolveFollowUpTask);
 
 
 // =========================================================================

@@ -5,13 +5,14 @@ import Member from "../models/Member.js";
 import Church from "../models/Church.js";
 import AttendanceEvent from "../models/AttendanceEvent.js";
 
-// Helper function to centralize QR target link contracts
-const generateEventQR = async (churchId, serviceName) => {
+// Helper function to centralize QR target link contracts — FIXED PARAMETERS
+const generateEventQR = async (churchId, eventId, serviceName) => {
+  // Encodes parameters cleanly into your production URL structure matching CheckIn.jsx
+  // const targetRedirectUrl = `http://localhost:5174/checkin?churchId=${churchId}&loc=${eventId}&serviceName=${encodeURIComponent(serviceName)}`;
 
-  // Encodes parameters cleanly into your production URL structure
-  const targetUrl = `https://checkin.besorah.app/?churchId=${churchId}&serviceName=${encodeURIComponent(serviceName)}`;
+  const targetRedirectUrl = `http://bsr.devphilips.com/checkin?churchId=${churchId}&loc=${eventId}&serviceName=${encodeURIComponent(serviceName)}`;
 
-  return await QRCode.toDataURL(targetUrl, {
+  return await QRCode.toDataURL(targetRedirectUrl, {
     errorCorrectionLevel: "H", // High correction handles crumpled printed banners
     margin: 2,
     width: 300,
@@ -32,37 +33,64 @@ export const registerChurch = async (req, res) => {
   }
 };
 
-// 2. CREATE AN EVENT (Admin Manual / Pre-scheduling Flow)
+// 2. CREATE AN EVENT (Admin Manual / Frontend Setup View Trigger Channel)
 export const createEvent = async (req, res) => {
-
-  console.log('body of the request', req.body)
-
+  console.log("Body of the request:", req.body);
   const { churchId, serviceName, date } = req.body;
+
+  if (!churchId || !serviceName) {
+    return res
+      .status(400)
+      .json({ success: false, message: "Missing required parameters." });
+  }
+
   try {
-    const newEvent = new AttendanceEvent({
+    // Normalize date to a safe start-of-day/end-of-day range window to prevent timestamp mismatches
+    const inputDate = date ? new Date(date) : new Date();
+    const startOfDay = new Date(inputDate.setHours(0, 0, 0, 0));
+    const endOfDay = new Date(inputDate.setHours(23, 59, 59, 999));
+
+    // Query across a complete 24-hour range window to catch existing matches cleanly
+    let event = await AttendanceEvent.findOne({
       churchId,
       serviceName,
-      date: date ? new Date(date) : new Date(),
-      attendedMembers: [],
+      date: { $gte: startOfDay, $lte: endOfDay },
     });
-    await newEvent.save();
 
-    console.log('Event saved in DB');
-    
+    let statusCode = 200;
 
-    // Generate QR code for this specific pre-scheduled event path
-    const qrCodeImage = await generateEventQR(churchId, serviceName);
+    if (event) {
+      console.log(
+        "Existing active event found for today. Re-routing session context...",
+      );
+    } else {
+      console.log("No matching event found. Creating new session...");
+      event = new AttendanceEvent({
+        churchId,
+        serviceName,
+        date: startOfDay, // Save normalized timestamp
+        attendedMembers: [],
+      });
+      await event.save();
+      statusCode = 201;
+      console.log("Event saved in DB");
+    }
 
-    console.log('Generated QR successfully.');
-    
+    // Pass the actual database record ID string straight to your generator parameters context
+    const qrCodeImage = await generateEventQR(churchId, event._id, serviceName);
+    console.log("Generated/Retrieved QR successfully.");
 
-    res.status(201).json({
+    return res.status(statusCode).json({
       success: true,
-      event: newEvent,
+      event,
       qrCode: qrCodeImage,
     });
   } catch (error) {
-    res.status(500).json({ error: "Failed to create event: " + error.message });
+    console.error("Error inside event gateway logic:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Failed to manage event: " + error.message,
+    });
   }
 };
 
@@ -70,29 +98,30 @@ export const createEvent = async (req, res) => {
 export const findOrCreate = async (req, res) => {
   const { churchId, serviceName } = req.body;
 
-  // Normalize the date to just midnight UTC so we match the exact calendar day
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const todayEnd = new Date();
+  todayEnd.setHours(23, 59, 59, 999);
 
   try {
     let event = await AttendanceEvent.findOne({
       churchId,
       serviceName,
-      date: today,
+      date: { $gte: todayStart, $lte: todayEnd },
     });
 
     if (!event) {
       event = new AttendanceEvent({
         churchId,
         serviceName,
-        date: today,
+        date: todayStart,
         attendedMembers: [],
       });
       await event.save();
     }
 
-    // Generate or fetch QR code for today's active tracking card
-    const qrCodeImage = await generateEventQR(churchId, serviceName);
+    // FIXED: Passed parameters align completely with helper contracts
+    const qrCodeImage = await generateEventQR(churchId, event._id, serviceName);
 
     res.status(200).json({
       success: true,
@@ -111,10 +140,9 @@ export const findOrCreate = async (req, res) => {
 // 4. GET DASHBOARD ANALYTICS
 export const getAnalytics = async (req, res) => {
   const { churchId } = req.params;
-  const { serviceName } = req.query; // e.g., ?serviceName=Sunday Service
+  const { serviceName } = req.query;
 
   try {
-    // Fixed inline require crash by using the native imported mongoose instance
     const matchStage = { churchId: new mongoose.Types.ObjectId(churchId) };
 
     if (serviceName) {
@@ -124,7 +152,7 @@ export const getAnalytics = async (req, res) => {
     const analytics = await AttendanceEvent.aggregate([
       { $match: matchStage },
       { $sort: { date: -1 } },
-      { $limit: 4 }, // Last 4 occurrences of this specific service type
+      { $limit: 4 },
       {
         $lookup: {
           from: "members",
@@ -173,83 +201,156 @@ export const getAnalytics = async (req, res) => {
 
 // 5. RUN MEMBER RETENTION SWEEP ENGINE
 export const checkMemberRetention = async (req, res) => {
-  const { churchId } = req.body;
+  const { churchId, threshold } = req.body;
+
+  // 1. Enforce Parameter Presence Hard Gates
+  if (!churchId) {
+    return res.status(400).json({
+      success: false,
+      message: "Missing required string parameter: churchId.",
+    });
+  }
 
   try {
-    // 1. Calculate the date threshold for 3 weeks ago
-    const threeWeeksAgo = new Date();
-    threeWeeksAgo.setDate(threeWeeksAgo.getDate() - 21);
+    // 2. Explicitly validate that churchId is a valid 24-character hex string before passing to query layers
+    if (!mongoose.Types.ObjectId.isValid(churchId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid hex string structure passed for churchId parameter.",
+      });
+    }
 
-    // 2. Find all service event IDs that have happened in the last 3 weeks for this church
+    const cleanChurchId = new mongoose.Types.ObjectId(churchId);
+
+    // 3. Fallback math verification safety checks
+    const weeksThresholdMultiplier =
+      threshold && !isNaN(parseInt(threshold)) ? parseInt(threshold) : 3;
+    const totalDaysSpanWindow = weeksThresholdMultiplier * 7;
+
+    const historicalThresholdDate = new Date();
+    historicalThresholdDate.setDate(
+      historicalThresholdDate.getDate() - totalDaysSpanWindow,
+    );
+
+    // 4. Trace event instances using the safely cast ObjectId wrapper signature
     const recentEvents = await AttendanceEvent.find({
-      churchId,
-      date: { $gte: threeWeeksAgo },
+      churchId: cleanChurchId,
+      date: { $gte: historicalThresholdDate },
     }).select("_id");
 
     const recentEventIds = recentEvents.map((event) => event._id);
 
+    // If no events exist in this time window, return an empty tracking state smoothly instead of throwing
     if (recentEventIds.length === 0) {
-      return res
-        .status(200)
-        .json({ message: "Not enough recent data to calculate trends." });
+      return res.status(200).json({
+        success: true,
+        message:
+          "Scan executed. Insufficient historical data parameters available inside this threshold week span window.",
+        stats: { newlyFlaggedAtRisk: 0, restoredToActive: 0 },
+      });
     }
 
-    // 3. Find members who HAVE attended at least one event in the last 3 weeks
-    const activeAttendees = await AttendanceEvent.distinct("attendedMembers", {
-      _id: { $in: recentEventIds },
+    // 5. Query active member IDs logged across subdocuments in those events
+    const activeAttendees = await AttendanceEvent.distinct(
+      "attendedMembers.memberId",
+      {
+        _id: { $in: recentEventIds },
+      },
+    );
+
+    // 6. Generate a 7-day grace period threshold date for completed outreaches
+    const gracePeriodDate = new Date();
+    gracePeriodDate.setDate(gracePeriodDate.getDate() - 7);
+
+    // 🌟 DEBUG LOGGING BLOCK 🌟
+    // Fetch and print the exact parameters of active candidates currently facing potential flags
+    const candidates = await Member.find({
+      churchId: cleanChurchId,
+      _id: { $nin: activeAttendees },
+      status: "active",
     });
 
-    // 4. Update statuses based on active presence parameters
+    console.log("\n--- 🔍 RETENTION SWEEP DATABASE STATE DEBUG 🔍 ---");
+    console.log(`Grace Period Cutoff Date: ${gracePeriodDate.toISOString()}`);
+    console.log(
+      `Checking ${candidates.length} active members with zero recent attendance...`,
+    );
 
-    // Condition A: If they are NOT in the active list, flag them as 'at-risk' (Fixed $nio -> $nin typo)
+    candidates.forEach((m, index) => {
+      console.log(`[Member #${index + 1}] Name: ${m.fullName}`);
+      console.log(`  - ID: ${m._id}`);
+      console.log(`  - Current status: ${m.status}`);
+      console.log(
+        `  - lastFollowUpDate: ${m.lastFollowUpDate ? m.lastFollowUpDate.toISOString() : "null"}`,
+      );
+    });
+    console.log("--------------------------------------------------\n");
+
+    // 7. Update document statuses based on active presence and grace period parameters
     const flaggedResult = await Member.updateMany(
       {
-        churchId,
+        churchId: cleanChurchId,
         _id: { $nin: activeAttendees },
         status: "active",
+        // Only flag them if they have never been contacted OR their last outreach was over 7 days ago
+        $or: [
+          { lastFollowUpDate: null },
+          { lastFollowUpDate: { $lt: gracePeriodDate } },
+        ],
       },
       { $set: { status: "at-risk" } },
     );
 
-    // Condition B: If they ARE in the active list but were previously marked 'at-risk', restore them
     const restoredResult = await Member.updateMany(
       {
-        churchId,
+        churchId: cleanChurchId,
         _id: { $in: activeAttendees },
         status: "at-risk",
       },
       { $set: { status: "active" } },
     );
 
-    res.status(200).json({
+    console.log(
+      `💡 Sweep completed. Newly Flagged: ${flaggedResult.modifiedCount || 0} | Restored: ${restoredResult.modifiedCount || 0}\n`,
+    );
+
+    return res.status(200).json({
       success: true,
-      message: "Retention profiles updated successfully.",
+      message:
+        "Retention sweep pass completed across membership data structures.",
       stats: {
-        newlyFlaggedAtRisk: flaggedResult.modifiedCount,
-        restoredToActive: restoredResult.modifiedCount,
+        newlyFlaggedAtRisk: flaggedResult.modifiedCount || 0,
+        restoredToActive: restoredResult.modifiedCount || 0,
       },
     });
   } catch (error) {
-    res
-      .status(500)
-      .json({ error: "Retention engine calculation failed: " + error.message });
+    console.error(
+      "Critical Exception caught inside checkMemberRetention processing engine:",
+      error,
+    );
+    return res.status(500).json({
+      success: false,
+      message: "Core pipeline operational engine fault: " + error.message,
+    });
   }
 };
 
 // 6. LIVE FEED FOR EACH SERVICES
-
 export const getLiveFeed = async (req, res) => {
   const { churchId } = req.params;
 
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const todayEnd = new Date();
+  todayEnd.setHours(23, 59, 59, 999);
 
   try {
+    // 1. Fetch today's event and populate member info inside the subdocuments
     const liveEvent = await AttendanceEvent.findOne({
       churchId,
-      date: today,
+      date: { $gte: todayStart, $lte: todayEnd },
     }).populate({
-      path: "attendedMembers",
+      path: "attendedMembers.memberId",
       select: "fullName phoneNumber attendanceStatus profession",
     });
 
@@ -258,84 +359,132 @@ export const getLiveFeed = async (req, res) => {
         success: true,
         message: "No active service instance initialized for today yet.",
         stats: { total: 0, firstTimers: 0, returning: 0, regulars: 0 },
+        chartData: [],
         attendees: [],
       });
     }
 
-    // Run distribution breakdown calculations on the populated array
-    const attendees = liveEvent.attendedMembers;
-    const stats = attendees.reduce(
-      (acc, member) => {
-        acc.total++;
-        if (member.attendanceStatus === "First Timer") acc.firstTimers++;
-        else if (member.attendanceStatus === "Returning Visitor")
-          acc.returning++;
-        else if (member.attendanceStatus === "Regular Member") acc.regulars++;
-        return acc;
-      },
-      { total: 0, firstTimers: 0, returning: 0, regulars: 0 },
-    );
+    // 2. Compile Live Feed Metric Stats
+    const attendeesList = liveEvent.attendedMembers;
+    const stats = { total: 0, firstTimers: 0, returning: 0, regulars: 0 };
 
-    res.status(200).json({ success: true, stats, attendees });
+    // Flat mapping to keep your frontend array maps perfectly clean
+    const formattedAttendees = [];
+
+    attendeesList.forEach((record) => {
+      const member = record.memberId;
+      if (!member) return;
+
+      stats.total++;
+      if (member.attendanceStatus === "First Timer") stats.firstTimers++;
+      else if (member.attendanceStatus === "Returning Visitor")
+        stats.returning++;
+      else stats.regulars++;
+
+      formattedAttendees.push({
+        _id: member._id,
+        fullName: member.fullName,
+        phoneNumber: member.phoneNumber,
+        attendanceStatus: member.attendanceStatus,
+        profession: member.profession,
+        scannedAt: record.scannedAt,
+      });
+    });
+
+    // 3. 🌟 TIME-SERIES TIMELINE AGGREGATION 🌟
+    // We group arrivals into hourly slots: 8:00 AM, 9:00 AM, 10:00 AM, 11:00 AM
+    const hourlyBuckets = {
+      "08:00": { label: "08:00", members: 0, visitors: 0 },
+      "09:00": { label: "09:00", members: 0, visitors: 0 },
+      "10:00": { label: "10:00", members: 0, visitors: 0 },
+      "11:00": { label: "11:00", members: 0, visitors: 0 },
+    };
+
+    attendeesList.forEach((record) => {
+      const member = record.memberId;
+      if (!member || !record.scannedAt) return;
+
+      const scanHour = new Date(record.scannedAt).getHours();
+      let bucketKey = "11:00"; // Fallback bucket
+
+      if (scanHour < 9) bucketKey = "08:00";
+      else if (scanHour === 9) bucketKey = "09:00";
+      else if (scanHour === 10) bucketKey = "10:00";
+
+      const isVisitor =
+        member.attendanceStatus === "First Timer" ||
+        member.attendanceStatus === "Returning Visitor";
+
+      if (isVisitor) {
+        hourlyBuckets[bucketKey].visitors++;
+      } else {
+        hourlyBuckets[bucketKey].members++;
+      }
+    });
+
+    const chartData = Object.values(hourlyBuckets);
+
+    return res.status(200).json({
+      success: true,
+      eventId: liveEvent._id,
+      stats,
+      chartData, // 🌟 Sent directly to the frontend chart!
+      attendees: formattedAttendees,
+    });
   } catch (error) {
+    console.error("Failed to compile live feed:", error);
     res
       .status(500)
       .json({ error: "Failed to compile live feed: " + error.message });
   }
 };
 
-
 // 7. MONTHLY BIRTHDAY LISTER
-
 export const getMonthlyBirthdays = async (req, res) => {
   const { churchId } = req.params;
 
   try {
-    // Determine current month in MM format (e.g., June -> '06')
-    const currentMonthStr = String(new Date().getMonth() + 1).padStart(2, '0');
-    
-    // Match any string ending with '/' followed by the current month (e.g., .*\/06)
+    const currentMonthStr = String(new Date().getMonth() + 1).padStart(2, "0");
     const birthdayRegex = new RegExp(`^\\d{2}/${currentMonthStr}$`);
 
     const celebrants = await Member.find({
       churchId,
-      birthday: { $regex: birthdayRegex }
-    }).select('fullName phoneNumber birthday profession');
+      birthday: { $regex: birthdayRegex },
+    }).select("fullName phoneNumber birthday profession");
 
-    // Sort them chronologically by day
     const sortedCelebrants = celebrants.sort((a, b) => {
-      return parseInt(a.birthday.split('/')[0]) - parseInt(b.birthday.split('/')[0]);
+      return (
+        parseInt(a.birthday.split("/")[0]) - parseInt(b.birthday.split("/")[0])
+      );
     });
 
-    res.status(200).json({ 
-      success: true, 
+    res.status(200).json({
+      success: true,
       month: currentMonthStr,
-      count: sortedCelebrants.length, 
-      celebrants: sortedCelebrants 
+      count: sortedCelebrants.length,
+      celebrants: sortedCelebrants,
     });
   } catch (error) {
-    res.status(500).json({ error: "Failed to build monthly birthday tracker: " + error.message });
+    res.status(500).json({
+      error: "Failed to build monthly birthday tracker: " + error.message,
+    });
   }
 };
 
-
 // 8. FUNCTION TO GET PEOPLE WHO NEED FOLLOW-UP
-
 export const getFollowUpPipeline = async (req, res) => {
   const { churchId } = req.params;
 
   try {
-    // Pipeline A: Grab any new visitor recorded in the system
     const visitors = await Member.find({
       churchId,
-      attendanceStatus: { $in: ['First Timer', 'Returning Visitor'] }
-    }).select('fullName phoneNumber attendanceStatus joinedAt');
+      attendanceStatus: { $in: ["First Timer", "Returning Visitor"] },
+    }).select("fullName phoneNumber attendanceStatus joinedAt");
 
-    // Pipeline B: Grab long-term regular members flagged as slipping away
     const atRiskMembers = await Member.find({
       churchId,
-      status: 'at-risk'
-    }).select('fullName phoneNumber profession joinedAt');
+      status: "at-risk",
+    }).select("fullName phoneNumber profession joinedAt");
 
     res.status(200).json({
       success: true,
@@ -343,10 +492,75 @@ export const getFollowUpPipeline = async (req, res) => {
         visitorFollowUpCount: visitors.length,
         visitorFollowUpList: visitors,
         atRiskCount: atRiskMembers.length,
-        atRiskList: atRiskMembers
-      }
+        atRiskList: atRiskMembers,
+      },
     });
   } catch (error) {
-    res.status(500).json({ error: "Failed to compile care group pipeline: " + error.message });
+    res.status(500).json({
+      error: "Failed to compile care group pipeline: " + error.message,
+    });
+  }
+};
+
+// 9. GET PUBLIC PROFILE BRANDING
+export const getPublicChurchProfile = async (req, res) => {
+  try {
+    const { churchId } = req.query;
+
+    if (!churchId) {
+      return res.status(400).json({
+        success: false,
+        message: "Church identifier parameter is missing.",
+      });
+    }
+
+    const church = await Church.findById(churchId).select("name");
+
+    if (!church) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Church organization not found." });
+    }
+
+    return res.status(200).json({
+      success: true,
+      churchName: church.name,
+    });
+  } catch (error) {
+    console.error("Error fetching public church profile:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Core server error fetching branding profiles.",
+    });
+  }
+};
+
+export const getAllMembers = async (req, res) => {
+  try {
+    const { churchId } = req.query;
+
+    // 1. Ensure the organization ID parameter is present
+    if (!churchId) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required parameter: churchId is mandatory.",
+      });
+    }
+
+    // 2. Fetch all members tied to this church, sorted newest first
+    const members = await Member.find({ churchId }).sort({ joinedAt: -1 });
+
+    // 3. Return the exact payload structure your React View is mapped to receive
+    return res.status(200).json({
+      success: true,
+      count: members.length,
+      members,
+    });
+  } catch (error) {
+    console.error("Error inside getAllMembers controller:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Core server failure retrieving church directory log files.",
+    });
   }
 };
