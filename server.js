@@ -38,3 +38,6 @@ mongoose.connect(process.env.MONGO_URI)
     console.error("❌ Database connection error:", error.message);
     process.exit(1);
   });
+
+
+module.exports = app
