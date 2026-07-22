@@ -98,41 +98,76 @@ export const createEvent = async (req, res) => {
 export const findOrCreate = async (req, res) => {
   const { churchId, serviceName } = req.body;
 
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const todayEnd = new Date();
-  todayEnd.setHours(23, 59, 59, 999);
+  // Enforce parameter presence checks
+  if (!churchId || !serviceName) {
+    return res.status(400).json({
+      success: false,
+      message:
+        "Missing mandatory body configurations: churchId and serviceName are required.",
+    });
+  }
 
   try {
-    let event = await AttendanceEvent.findOne({
-      churchId,
-      serviceName,
-      date: { $gte: todayStart, $lte: todayEnd },
-    });
-
-    if (!event) {
-      event = new AttendanceEvent({
-        churchId,
-        serviceName,
-        date: todayStart,
-        attendedMembers: [],
+    if (!mongoose.Types.ObjectId.isValid(churchId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid hex string structure passed for churchId parameter.",
       });
-      await event.save();
     }
 
-    // FIXED: Passed parameters align completely with helper contracts
+    const cleanChurchId = new mongoose.Types.ObjectId(churchId);
+
+    // 🌟 RULE 1: Guard against overlapping active sessions
+    // Look for ANY live session that has not been explicitly terminated via status assignment
+    const activeSession = await AttendanceEvent.findOne({
+      churchId: cleanChurchId,
+      status: "active",
+    });
+
+    if (activeSession) {
+      return res.status(400).json({
+        success: false,
+        activeSessionFound: true,
+        message: `Operation Blocked: The session '${activeSession.serviceName}' is currently live. You must close it via the dashboard before initiating a new service instance.`,
+        activeEventId: activeSession._id,
+        activeServiceName: activeSession.serviceName,
+      });
+    }
+
+    // Capture explicit date thresholds for today
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    // Create a new explicit active session instance
+    const event = new AttendanceEvent({
+      churchId: cleanChurchId,
+      serviceName,
+      date: todayStart,
+      status: "active", // Explicit status state management
+      attendedMembers: [],
+    });
+
+    await event.save();
+
+    // Generate unique secure QR matrix matching this specific event instance
     const qrCodeImage = await generateEventQR(churchId, event._id, serviceName);
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       eventId: event._id,
       serviceName: event.serviceName,
       date: event.date,
+      status: event.status,
       qrCode: qrCodeImage,
     });
   } catch (error) {
-    res.status(500).json({
-      error: "Failed to initialize service instance: " + error.message,
+    console.error(
+      "Critical error in findOrCreate service initialization tracker:",
+      error,
+    );
+    return res.status(500).json({
+      success: false,
+      message: "Failed to initialize unique service instance: " + error.message,
     });
   }
 };
