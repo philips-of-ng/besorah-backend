@@ -13,14 +13,14 @@ import {
   registerChurch, 
   createEvent, 
   findOrCreate, 
-  endActiveService, // 🌟 FIXED: Added missing import here!
+  endActiveService,
   getAnalytics, 
   checkMemberRetention, 
   getLiveFeed, 
   getMonthlyBirthdays, 
   getFollowUpPipeline, 
   getPublicChurchProfile,
-  getAllMembers
+  getAllMembers,
 } from '../controllers/churchController.js';
 
 // =========================================================================

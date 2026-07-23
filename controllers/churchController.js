@@ -172,6 +172,61 @@ export const findOrCreate = async (req, res) => {
   }
 };
 
+export const endActiveService = async (req, res) => {
+  const { churchId, eventId } = req.body;
+
+  if (!churchId || !eventId) {
+    return res.status(400).json({
+      success: false,
+      message:
+        "Missing termination context: both churchId and eventId parameters are required.",
+    });
+  }
+
+  try {
+    if (
+      !mongoose.Types.ObjectId.isValid(churchId) ||
+      !mongoose.Types.ObjectId.isValid(eventId)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Invalid configuration signatures provided for structural IDs.",
+      });
+    }
+
+    // Find the session and flip status to completed
+    const closedEvent = await AttendanceEvent.findOneAndUpdate(
+      { _id: eventId, churchId, status: "active" },
+      { $set: { status: "completed" } },
+      { returnDocument: "after" }, // Modern Mongoose standards replacement for new: true
+    );
+
+    if (!closedEvent) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Active target session instance not found or already closed out.",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `The service session '${closedEvent.serviceName}' has been successfully finalized. All active scanning paths are now closed.`,
+      eventId: closedEvent._id,
+      status: closedEvent.status,
+    });
+  } catch (error) {
+    console.error("Exception caught clearing live active operations:", error);
+    return res.status(500).json({
+      success: false,
+      message:
+        "Operational system fault encountered while closing session: " +
+        error.message,
+    });
+  }
+};
+
 // 4. GET DASHBOARD ANALYTICS
 export const getAnalytics = async (req, res) => {
   const { churchId } = req.params;
