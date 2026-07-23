@@ -12,17 +12,8 @@ const app = express();
 // const PORT = process.env.PORT || 3000;
 
 // Middleware
-app.use(
-  cors({
-    origin: [
-      "http://bsr.devphilips.com",
-      "https://bsr.devphilips.com",
-      "http://localhost:5173", // For your local frontend testing
-      "http://localhost:3000",
-    ],
-    credentials: true,
-  }),
-);
+app.use()
+
 app.use(express.json());
 
 // Mount Routes
