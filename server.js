@@ -19,6 +19,7 @@ const app = express();
 
 // Middleware
 app.use(express.json());
+app.use(cors())
 
 // Mount Routes
 app.use("/api/auth", authRoutes);
