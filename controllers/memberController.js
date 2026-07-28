@@ -1,133 +1,6 @@
 import mongoose from "mongoose";
-
 import Member from "../models/Member.js";
 import AttendanceEvent from "../models/AttendanceEvent.js";
-import Church from "../models/Church.js";
-import { appendToCheckInSheet } from "../utils/googleSheetsHelper.js";
-
-export const memberCheckIn = async (req, res) => {
-  const { loc, churchId, fullName, phoneNumber, email, profession, birthday } =
-    req.body;
-
-  if (!loc || !churchId || !fullName || !phoneNumber) {
-    return res.status(400).json({
-      error:
-        "Missing required fields: loc, churchId, fullName, and phoneNumber are mandatory.",
-    });
-  }
-
-  try {
-    // 1. Fetch the active attendance event first to verify its existence
-    const eventInstance = await AttendanceEvent.findById(loc);
-    if (!eventInstance) {
-      return res.status(404).json({
-        error: "Active attendance event session not found on server.",
-      });
-    }
-
-    // 2. Check for an existing member profile matching this phone number
-    let member = await Member.findOne({ churchId, phoneNumber });
-    let isNewMember = false;
-    let computedStatus = "Regular Member";
-
-    if (!member) {
-      isNewMember = true;
-      computedStatus = "First Timer";
-
-      member = new Member({
-        churchId,
-        fullName,
-        phoneNumber,
-        email: email || "",
-        profession: profession || "",
-        birthday: birthday || "",
-        attendanceStatus: computedStatus,
-        status: "active",
-        joinedAt: new Date(),
-      });
-      await member.save();
-    } else {
-      // Use the profile's historically recorded status if they already exist
-      computedStatus = member.attendanceStatus || "Regular Member";
-    }
-
-    // 🌟 3. DUPLICATION GUARD ENGINE: Scan subdocument properties inside the attendee array
-    const alreadyCheckedIn = eventInstance.attendedMembers.some(
-      (attendee) =>
-        attendee.memberId &&
-        attendee.memberId.toString() === member._id.toString(),
-    );
-
-    if (alreadyCheckedIn) {
-      // Return an early informative 200 message without duplicate operations
-      return res.status(200).json({
-        success: true,
-        message: `You've already checked in for this service session, ${member.fullName}!`,
-        member: {
-          id: member._id,
-          fullName: member.fullName,
-        },
-      });
-    }
-
-    // 🌟 4. Update the event subdocument array with the exact check-in timestamp
-    await AttendanceEvent.findByIdAndUpdate(loc, {
-      $push: {
-        attendedMembers: {
-          memberId: member._id,
-          scannedAt: new Date(),
-        },
-      },
-    });
-
-    // 5. GOOGLE SHEETS CLOUD SYNCHRONIZATION PIPELINE
-    try {
-      const activeChurch = await Church.findById(churchId);
-
-      if (activeChurch && activeChurch.googleRefreshToken) {
-        const targetSpreadsheetId =
-          activeChurch.syncedSheets?.get(computedStatus);
-
-        if (targetSpreadsheetId) {
-          appendToCheckInSheet(
-            activeChurch.googleRefreshToken,
-            targetSpreadsheetId,
-            {
-              fullName,
-              phoneNumber,
-              email: email || "",
-              attendanceStatus: computedStatus,
-              profession: profession || "",
-              birthday: birthday || "",
-            },
-          );
-        }
-      }
-    } catch (sheetError) {
-      console.error(
-        "⚠️ Background Google Sheets sync bypassed:",
-        sheetError.message,
-      );
-    }
-
-    // 6. Return standard fresh arrival message response
-    return res.status(200).json({
-      success: true,
-      message: isNewMember
-        ? "Welcome! Thank you for joining us for the first time."
-        : `Welcome back, ${member.fullName}!`,
-      member: {
-        id: member._id,
-        fullName: member.fullName,
-      },
-    });
-  } catch (error) {
-    console.error("Error inside memberCheckIn controller:", error);
-    return res
-      .status(500)
-      .json({ error: "Check-in processing failed: " + error.message });
-  }
-};
 
 export const resolveFollowUpTask = async (req, res) => {
   const { churchId, memberId } = req.body;
@@ -147,18 +20,13 @@ export const resolveFollowUpTask = async (req, res) => {
         .json({ success: false, message: "Member profile not found." });
     }
 
-    // 1. Lock in the grace period for At-Risk members
     member.lastFollowUpDate = new Date();
-    member.status = "active"; // Restore to active
+    member.status = "active";
     member.followUpCount = (member.followUpCount || 0) + 1;
 
-    // 🌟 2. PROGRESSIVE GRADUATION (No more extreme jumps!)
     if (member.attendanceStatus === "First Timer") {
-      // First-timers graduate to Returning Visitors after their initial welcome call
       member.attendanceStatus = "Returning Visitor";
     } else if (member.attendanceStatus === "Returning Visitor") {
-      // Returning visitors stay as Returning Visitors, or can be manually upgraded to Regulars
-      // in the directory when they are ready. Resolving outreach just logs the contact.
       console.log(
         `Log: Outreached returning visitor ${member.fullName}. Kept category intact.`,
       );
@@ -184,7 +52,6 @@ export const getMemberHistory = async (req, res) => {
   const { memberId } = req.params;
 
   try {
-    // 1. Validate the MongoDB ObjectID structure
     if (!mongoose.Types.ObjectId.isValid(memberId)) {
       return res.status(400).json({
         success: false,
@@ -192,7 +59,6 @@ export const getMemberHistory = async (req, res) => {
       });
     }
 
-    // 2. Fetch the member's profile details
     const member = await Member.findById(memberId);
     if (!member) {
       return res.status(404).json({
@@ -201,14 +67,12 @@ export const getMemberHistory = async (req, res) => {
       });
     }
 
-    // 3. Find all events they attended, sorted by date (newest first)
     const history = await AttendanceEvent.find({
       attendedMembers: memberId,
     })
       .sort({ date: -1 })
-      .select("name date category description"); // Pull relevant event details
+      .select("name date category description");
 
-    // 4. Return unified profile metadata and chronological history logs
     return res.status(200).json({
       success: true,
       member: {
@@ -232,6 +96,217 @@ export const getMemberHistory = async (req, res) => {
     });
   } catch (error) {
     console.error("Error retrieving member history:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Core pipeline operational engine fault: " + error.message,
+    });
+  }
+};
+
+export const getAllMembers = async (req, res) => {
+  try {
+    const { churchId } = req.query;
+
+    if (!churchId) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required parameter: churchId is mandatory.",
+      });
+    }
+
+    const members = await Member.find({ churchId }).sort({ joinedAt: -1 });
+
+    return res.status(200).json({
+      success: true,
+      count: members.length,
+      members,
+    });
+  } catch (error) {
+    console.error("Error inside getAllMembers controller:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Core server failure retrieving church directory log files.",
+    });
+  }
+};
+
+export const getMonthlyBirthdays = async (req, res) => {
+  const { churchId } = req.params;
+
+  try {
+    const currentMonthStr = String(new Date().getMonth() + 1).padStart(2, "0");
+    const birthdayRegex = new RegExp(`^\\d{2}/${currentMonthStr}$`);
+
+    const celebrants = await Member.find({
+      churchId,
+      birthday: { $regex: birthdayRegex },
+    }).select("fullName phoneNumber birthday profession");
+
+    const sortedCelebrants = celebrants.sort((a, b) => {
+      return (
+        parseInt(a.birthday.split("/")[0]) - parseInt(b.birthday.split("/")[0])
+      );
+    });
+
+    res.status(200).json({
+      success: true,
+      month: currentMonthStr,
+      count: sortedCelebrants.length,
+      celebrants: sortedCelebrants,
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: "Failed to build monthly birthday tracker: " + error.message,
+    });
+  }
+};
+
+export const getFollowUpPipeline = async (req, res) => {
+  const { churchId } = req.params;
+
+  try {
+    const visitors = await Member.find({
+      churchId,
+      attendanceStatus: { $in: ["First Timer", "Returning Visitor"] },
+    }).select("fullName phoneNumber attendanceStatus joinedAt");
+
+    const atRiskMembers = await Member.find({
+      churchId,
+      status: "at-risk",
+    }).select("fullName phoneNumber profession joinedAt");
+
+    res.status(200).json({
+      success: true,
+      pipeline: {
+        visitorFollowUpCount: visitors.length,
+        visitorFollowUpList: visitors,
+        atRiskCount: atRiskMembers.length,
+        atRiskList: atRiskMembers,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: "Failed to compile care group pipeline: " + error.message,
+    });
+  }
+};
+
+export const checkMemberRetention = async (req, res) => {
+  const { churchId, threshold } = req.body;
+
+  if (!churchId) {
+    return res.status(400).json({
+      success: false,
+      message: "Missing required string parameter: churchId.",
+    });
+  }
+
+  try {
+    if (!mongoose.Types.ObjectId.isValid(churchId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid hex string structure passed for churchId parameter.",
+      });
+    }
+
+    const cleanChurchId = new mongoose.Types.ObjectId(churchId);
+    const weeksThresholdMultiplier =
+      threshold && !isNaN(parseInt(threshold)) ? parseInt(threshold) : 3;
+    const totalDaysSpanWindow = weeksThresholdMultiplier * 7;
+
+    const historicalThresholdDate = new Date();
+    historicalThresholdDate.setDate(
+      historicalThresholdDate.getDate() - totalDaysSpanWindow,
+    );
+
+    const recentEvents = await AttendanceEvent.find({
+      churchId: cleanChurchId,
+      date: { $gte: historicalThresholdDate },
+    }).select("_id");
+
+    const recentEventIds = recentEvents.map((event) => event._id);
+
+    if (recentEventIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message:
+          "Scan executed. Insufficient historical data parameters available inside this threshold week span window.",
+        stats: { newlyFlaggedAtRisk: 0, restoredToActive: 0 },
+      });
+    }
+
+    const activeAttendees = await AttendanceEvent.distinct(
+      "attendedMembers.memberId",
+      {
+        _id: { $in: recentEventIds },
+      },
+    );
+
+    const gracePeriodDate = new Date();
+    gracePeriodDate.setDate(gracePeriodDate.getDate() - 7);
+
+    const candidates = await Member.find({
+      churchId: cleanChurchId,
+      _id: { $nin: activeAttendees },
+      status: "active",
+    });
+
+    console.log("\n--- ðŸ” RETENTION SWEEP DATABASE STATE DEBUG ðŸ” ---");
+    console.log(`Grace Period Cutoff Date: ${gracePeriodDate.toISOString()}`);
+    console.log(
+      `Checking ${candidates.length} active members with zero recent attendance...`,
+    );
+
+    candidates.forEach((m, index) => {
+      console.log(`[Member #${index + 1}] Name: ${m.fullName}`);
+      console.log(`  - ID: ${m._id}`);
+      console.log(`  - Current status: ${m.status}`);
+      console.log(
+        `  - lastFollowUpDate: ${m.lastFollowUpDate ? m.lastFollowUpDate.toISOString() : "null"}`,
+      );
+    });
+    console.log("--------------------------------------------------\n");
+
+    const flaggedResult = await Member.updateMany(
+      {
+        churchId: cleanChurchId,
+        _id: { $nin: activeAttendees },
+        status: "active",
+        $or: [
+          { lastFollowUpDate: null },
+          { lastFollowUpDate: { $lt: gracePeriodDate } },
+        ],
+      },
+      { $set: { status: "at-risk" } },
+    );
+
+    const restoredResult = await Member.updateMany(
+      {
+        churchId: cleanChurchId,
+        _id: { $in: activeAttendees },
+        status: "at-risk",
+      },
+      { $set: { status: "active" } },
+    );
+
+    console.log(
+      `ðŸ’¡ Sweep completed. Newly Flagged: ${flaggedResult.modifiedCount || 0} | Restored: ${restoredResult.modifiedCount || 0}\n`,
+    );
+
+    return res.status(200).json({
+      success: true,
+      message:
+        "Retention sweep pass completed across membership data structures.",
+      stats: {
+        newlyFlaggedAtRisk: flaggedResult.modifiedCount || 0,
+        restoredToActive: restoredResult.modifiedCount || 0,
+      },
+    });
+  } catch (error) {
+    console.error(
+      "Critical Exception caught inside checkMemberRetention processing engine:",
+      error,
+    );
     return res.status(500).json({
       success: false,
       message: "Core pipeline operational engine fault: " + error.message,

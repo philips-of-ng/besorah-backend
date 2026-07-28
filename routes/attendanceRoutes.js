@@ -1,16 +1,13 @@
-import express from 'express'
-import Member from '../models/Member.js'
-import AttendanceEvent from '../models/AttendanceEvent.js';
-import { memberCheckIn } from '../controllers/memberController.js';
-import { checkMemberRetention } from '../controllers/churchController.js';
-import { manualCheckInOverride } from '../controllers/attendanceController.js';
+import express from "express";
+import {
+  manualCheckInOverride,
+  memberCheckIn,
+} from "../controllers/attendanceController.js";
 
-const router = express.Router()
+const router = express.Router();
 
+// Unified form submissions for attendee check-in and automatic registration.
+router.post("/manual-checkin", manualCheckInOverride);
+router.post("/check-in", memberCheckIn);
 
-// Unified Form Submission (Check-In & Auto-Registration)
-router.post('/manual-checkin', manualCheckInOverride)
-router.post('/check-in', memberCheckIn);
-router.post('/retention/sweep', checkMemberRetention)
-
-export default router
+export default router;
