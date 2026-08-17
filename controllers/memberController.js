@@ -68,10 +68,10 @@ export const getMemberHistory = async (req, res) => {
     }
 
     const history = await AttendanceEvent.find({
-      attendedMembers: memberId,
+      "attendedMembers.memberId": memberId,
     })
       .sort({ date: -1 })
-      .select("name date category description");
+      .select("serviceName date");
 
     return res.status(200).json({
       success: true,
@@ -88,10 +88,8 @@ export const getMemberHistory = async (req, res) => {
       },
       history: history.map((event) => ({
         id: event._id,
-        eventName: event.name,
+        eventName: event.serviceName,
         date: event.date,
-        category: event.category || "Sunday Service",
-        description: event.description || "",
       })),
     });
   } catch (error) {

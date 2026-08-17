@@ -4,6 +4,38 @@ import Church from "../models/Church.js";
 import mongoose from "mongoose";
 import { appendToCheckInSheet } from "../utils/googleSheetsHelper.js";
 
+const STALE_SESSION_HOURS = 8;
+
+const computePercentage = (current, baseline) => {
+  if (baseline === 0) return current > 0 ? 100 : 0;
+  return Math.round(((current - baseline) / baseline) * 100);
+};
+
+export const autoTerminateStaleSessions = async (churchId) => {
+  try {
+    const staleThreshold = new Date();
+    staleThreshold.setHours(staleThreshold.getHours() - STALE_SESSION_HOURS);
+
+    const matchFilter = { status: "active", createdAt: { $lt: staleThreshold } };
+    if (churchId) matchFilter.churchId = churchId;
+
+    const result = await AttendanceEvent.updateMany(matchFilter, {
+      $set: { status: "completed" },
+    });
+
+    if (result.modifiedCount > 0) {
+      console.log(
+        `Auto-terminated ${result.modifiedCount} stale active session(s) older than ${STALE_SESSION_HOURS} hours.`,
+      );
+    }
+
+    return result.modifiedCount || 0;
+  } catch (error) {
+    console.error("Stale session auto-termination error:", error.message);
+    return 0;
+  }
+};
+
 export const memberCheckIn = async (req, res) => {
   const { loc, churchId, fullName, phoneNumber, email, profession, birthday } =
     req.body;
@@ -16,6 +48,8 @@ export const memberCheckIn = async (req, res) => {
   }
 
   try {
+    await autoTerminateStaleSessions(churchId);
+
     const eventInstance = await AttendanceEvent.findById(loc);
     if (!eventInstance) {
       return res.status(404).json({
@@ -314,6 +348,7 @@ export const getAnalytics = async (req, res) => {
 // LIVE FEED FOR EACH SERVICE
 export const getLiveFeed = async (req, res) => {
   const { churchId } = req.params;
+  const { compareMode } = req.query;
 
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
@@ -321,6 +356,8 @@ export const getLiveFeed = async (req, res) => {
   todayEnd.setHours(23, 59, 59, 999);
 
   try {
+    await autoTerminateStaleSessions(churchId);
+
     const liveEvent = await AttendanceEvent.findOne({
       churchId,
       date: { $gte: todayStart, $lte: todayEnd },
@@ -336,6 +373,7 @@ export const getLiveFeed = async (req, res) => {
         stats: { total: 0, firstTimers: 0, returning: 0, regulars: 0 },
         chartData: [],
         attendees: [],
+        comparison: null,
       });
     }
 
@@ -394,12 +432,100 @@ export const getLiveFeed = async (req, res) => {
 
     const chartData = Object.values(hourlyBuckets);
 
+    let comparison = null;
+    const validModes = ["previous", "same-day", "4-week"];
+
+    if (compareMode && validModes.includes(compareMode)) {
+      const baseFilter = {
+        churchId,
+        date: { $lt: todayStart },
+      };
+      if (liveEvent.serviceName) {
+        baseFilter.serviceName = liveEvent.serviceName;
+      }
+
+      let baselineTotal = 0;
+      let eventCount = 0;
+
+      if (compareMode === "previous") {
+        const prevEvent = await AttendanceEvent.findOne(baseFilter)
+          .sort({ date: -1 })
+          .select("attendedMembers date serviceName");
+
+        if (prevEvent) {
+          baselineTotal = prevEvent.attendedMembers.length;
+          eventCount = 1;
+          comparison = {
+            mode: "previous",
+            label: `vs previous (${prevEvent.serviceName || "service"})`,
+            previousEventId: prevEvent._id,
+            previousDate: prevEvent.date,
+            previousTotal: baselineTotal,
+            currentTotal: stats.total,
+            percentageChange: computePercentage(stats.total, baselineTotal),
+          };
+        }
+      } else if (compareMode === "same-day") {
+        const dayOfWeek = new Date().getDay();
+        const mongoDay = dayOfWeek + 1;
+        const eightWeeksAgo = new Date();
+        eightWeeksAgo.setDate(eightWeeksAgo.getDate() - 56);
+
+        const sameDayEvents = await AttendanceEvent.find({
+          ...baseFilter,
+          date: { $gte: eightWeeksAgo, $lt: todayStart },
+          $expr: { $eq: [{ $dayOfWeek: "$date" }, mongoDay] },
+        }).select("attendedMembers date");
+
+        if (sameDayEvents.length > 0) {
+          baselineTotal = Math.round(
+            sameDayEvents.reduce((sum, e) => sum + e.attendedMembers.length, 0) /
+              sameDayEvents.length,
+          );
+          eventCount = sameDayEvents.length;
+          comparison = {
+            mode: "same-day",
+            label: `vs same-day average (${eventCount} events)`,
+            baselineAverage: baselineTotal,
+            eventCount,
+            currentTotal: stats.total,
+            percentageChange: computePercentage(stats.total, baselineTotal),
+          };
+        }
+      } else if (compareMode === "4-week") {
+        const fourWeeksAgo = new Date();
+        fourWeeksAgo.setDate(fourWeeksAgo.getDate() - 28);
+
+        const rollingEvents = await AttendanceEvent.find({
+          ...baseFilter,
+          date: { $gte: fourWeeksAgo, $lt: todayStart },
+        }).select("attendedMembers date");
+
+        if (rollingEvents.length > 0) {
+          baselineTotal = Math.round(
+            rollingEvents.reduce((sum, e) => sum + e.attendedMembers.length, 0) /
+              rollingEvents.length,
+          );
+          eventCount = rollingEvents.length;
+          comparison = {
+            mode: "4-week",
+            label: `vs 4-week rolling average (${eventCount} events)`,
+            baselineAverage: baselineTotal,
+            eventCount,
+            currentTotal: stats.total,
+            percentageChange: computePercentage(stats.total, baselineTotal),
+          };
+        }
+      }
+    }
+
     return res.status(200).json({
       success: true,
       eventId: liveEvent._id,
       stats,
       chartData,
       attendees: formattedAttendees,
+      comparison,
     });
   } catch (error) {
     console.error("Failed to compile live feed:", error);

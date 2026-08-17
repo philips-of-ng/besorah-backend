@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import QRCode from "qrcode";
 import EventType from "../models/eventModel.js";
 import AttendanceEvent from "../models/AttendanceEvent.js";
+import { autoTerminateStaleSessions } from "./attendanceController.js";
 
 // Centralizes the QR target-link contract used by attendance events.
 const generateEventQR = async (churchId, eventId, serviceName) => {
@@ -93,18 +94,30 @@ export const findOrCreate = async (req, res) => {
     }
 
     const cleanChurchId = new mongoose.Types.ObjectId(churchId);
+
+    await autoTerminateStaleSessions(cleanChurchId);
+
     const activeSession = await AttendanceEvent.findOne({
       churchId: cleanChurchId,
       status: "active",
-    });
+    }).select("_id serviceName date createdAt attendedMembers");
 
     if (activeSession) {
+      const now = new Date();
+      const durationMs = now - new Date(activeSession.createdAt);
+      const durationHours = Math.floor(durationMs / 3600000);
+      const durationMinutes = Math.floor((durationMs % 3600000) / 60000);
+
       return res.status(400).json({
         success: false,
         activeSessionFound: true,
         message: `Operation Blocked: The session '${activeSession.serviceName}' is currently live. You must close it via the dashboard before initiating a new service instance.`,
         activeEventId: activeSession._id,
         activeServiceName: activeSession.serviceName,
+        activeEventDate: activeSession.date,
+        activeEventCreatedAt: activeSession.createdAt,
+        activeEventDuration: `${durationHours}h ${durationMinutes}m`,
+        activeAttendanceCount: activeSession.attendedMembers?.length || 0,
       });
     }
 

@@ -19,7 +19,18 @@ const app = express();
 
 // Middleware
 app.use(express.json());
-app.use(cors())
+
+const corsOptions = {
+  origin: [
+    "http://localhost:5173",
+    "http://localhost:5000",
+    "https://bsr.devphilips.com",
+    "https://bsrapi.devphilips.com",
+  ],
+  credentials: true,
+};
+
+app.use(cors(corsOptions))
 
 // Mount Routes
 app.use("/api/auth", authRoutes);
